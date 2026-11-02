@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site Photo Checklist</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #fff; --ink: #1d2433; --muted: #6b7280;
+    --line: #e2e5ea; --accent: #1f6feb; --done: #1a7f37;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { background: var(--ink); color: #fff; padding: 16px 20px; }
+  header h1 { margin: 0; font-size: 1.25rem; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-bottom: 16px; }
+  label.field { display: block; font-weight: 600; margin-bottom: 6px; }
+  input[type=text], select {
+    width: 100%; padding: 12px; font-size: 1rem; border: 1px solid var(--line);
+    border-radius: 8px; background: #fff;
+  }
+  .row { display: grid; gap: 12px; }
+  @media (min-width: 520px) { .row { grid-template-columns: 1fr 1fr; } }
+  .progress { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; color: var(--muted); }
+  .bar { flex: 1; height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--done); transition: width .2s; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li.item { border-top: 1px solid var(--line); padding: 12px 0; }
+  li.item:first-child { border-top: none; }
+  .top { display: flex; align-items: center; gap: 12px; }
+  .top input[type=checkbox] { width: 24px; height: 24px; accent-color: var(--done); flex: none; }
+  .top .name { flex: 1; font-size: 1.05rem; }
+  li.checked .name { color: var(--done); }
+  .btn { border: 1px solid var(--accent); color: var(--accent); background: #fff;
+         padding: 8px 12px; border-radius: 8px; font-size: .9rem; cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.danger { border-color: #cf222e; color: #cf222e; }
+  .photos { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0 36px; }
+  .thumb { position: relative; }
+  .thumb img { width: 84px; height: 84px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; }
+  .thumb button { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%;
+                  border: none; background: #cf222e; color: #fff; font-size: 14px; line-height: 22px; cursor: pointer; }
+  .note { margin: 8px 0 0 36px; width: calc(100% - 36px); }
+  .note input { padding: 8px; font-size: .9rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .empty { color: var(--muted); text-align: center; padding: 24px 0; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header><h1>Site Photo Checklist</h1></header>
+<main>
+  <div class="card">
+    <div class="row">
+      <div>
+        <label class="field" for="site">Site / Job name</label>
+        <input type="text" id="site" placeholder="e.g. 123 Main St">
+      </div>
+      <div>
+        <label class="field" for="mount">Mount type</label>
+        <select id="mount"><option value="">— Select mount type —</option></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="checklistCard">
+    <div id="empty" class="empty">Pick a mount type to see its checklist.</div>
+    <div id="checklistWrap" class="hidden">
+      <h2 id="listTitle" style="margin:0 0 4px;font-size:1.1rem"></h2>
+      <div class="progress"><div class="bar"><div id="barFill"></div></div><span id="count"></span></div>
+      <ul id="list"></ul>
+    </div>
+  </div>
+
+  <div class="card actions hidden" id="actions">
+    <button class="btn primary" id="downloadBtn">Download photos</button>
+    <button class="btn danger" id="resetBtn">Clear this checklist</button>
+  </div>
+</main>
+
+<script>
+/* ------------------------------------------------------------------
+   CHECKLIST DATA — edit this to add mount types or items.
+   Each mount type maps to the list of photos/measurements required.
+------------------------------------------------------------------- */
+const CHECKLISTS = {
+  "Ballast":     ["Level pic", "Height pic"],
+  "Nano":        ["Whip length", "Level pic", "Pipe length"],
+  "Sleeve wall": ["Sleeve length", "Bracket separation"],
+  "Timber":      ["Stud size", "Stud separation"]
+};
+
+/* ---------------- state ---------------- */
+// Checks and notes are remembered on this device; photos are kept in memory
+// (until the page is closed) so the browser's storage limit isn't exceeded.
+const STORE_KEY = "sitePhotoChecklist.v1";
+let state = load();          // { site, mount, data: { [mount]: { [item]: {checked, note} } } }
+const photos = {};           // { "mount|item": [ {url, file} ] }
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || { site: "", mount: "", data: {} }; }
+  catch (e) { return { site: "", mount: "", data: {} }; }
+}
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+}
+function entry(mount, item) {
+  state.data[mount] = state.data[mount] || {};
+  state.data[mount][item] = state.data[mount][item] || { checked: false, note: "" };
+  return state.data[mount][item];
+}
+
+/* ---------------- UI ---------------- */
+const $ = id => document.getElementById(id);
+const mountSel = $("mount"), siteInput = $("site");
+
+Object.keys(CHECKLISTS).forEach(m => {
+  const o = document.createElement("option"); o.value = m; o.textContent = m; mountSel.appendChild(o);
+});
+mountSel.value = state.mount || "";
+siteInput.value = state.site || "";
+
+mountSel.addEventListener("change", () => { state.mount = mountSel.value; save(); render(); });
+siteInput.addEventListener("input", () => { state.site = siteInput.value; save(); });
+
+function render() {
+  const mount = state.mount;
+  const has = !!CHECKLISTS[mount];
+  $("empty").classList.toggle("hidden", has);
+  $("checklistWrap").classList.toggle("hidden", !has);
+  $("actions").classList.toggle("hidden", !has);
+  if (!has) return;
+
+  $("listTitle").textContent = mount + " checklist";
+  const list = $("list"); list.innerHTML = "";
+
+  CHECKLISTS[mount].forEach((item, i) => {
+    const e = entry(mount, item);
+    const key = mount + "|" + item;
+    const li = document.createElement("li");
+    li.className = "item" + (e.checked ? " checked" : "");
+
+    const top = document.createElement("div"); top.className = "top";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.id = "cb" + i; cb.checked = e.checked;
+    cb.addEventListener("change", () => { e.checked = cb.checked; save(); render(); });
+    const name = document.createElement("label"); name.className = "name"; name.htmlFor = cb.id; name.textContent = item;
+
+    const file = document.createElement("input");
+    file.type = "file"; file.accept = "image/*"; file.capture = "environment"; file.multiple = true; file.hidden = true;
+    file.addEventListener("change", () => {
+      photos[key] = photos[key] || [];
+      [...file.files].forEach(f => photos[key].push({ url: URL.createObjectURL(f), file: f }));
+      if (file.files.length) { e.checked = true; save(); }
+      render();
+    });
+    const camBtn = document.createElement("button"); camBtn.className = "btn"; camBtn.textContent = "📷 Add photo";
+    camBtn.addEventListener("click", () => file.click());
+
+    top.append(cb, name, camBtn, file);
+    li.appendChild(top);
+
+    const pics = photos[key] || [];
+    if (pics.length) {
+      const wrap = document.createElement("div"); wrap.className = "photos";
+      pics.forEach((p, idx) => {
+        const t = document.createElement("div"); t.className = "thumb";
+        const img = document.createElement("img"); img.src = p.url; img.alt = item;
+        const x = document.createElement("button"); x.textContent = "×"; x.title = "Remove photo";
+        x.addEventListener("click", () => { URL.revokeObjectURL(p.url); pics.splice(idx, 1); render(); });
+        t.append(img, x); wrap.appendChild(t);
+      });
+      li.appendChild(wrap);
+    }
+
+    const noteWrap = document.createElement("div"); noteWrap.className = "note";
+    const note = document.createElement("input"); note.type = "text"; note.placeholder = "Notes / measurement";
+    note.value = e.note;
+    note.addEventListener("input", () => { e.note = note.value; save(); });
+    noteWrap.appendChild(note); li.appendChild(noteWrap);
+
+    list.appendChild(li);
+  });
+
+  const items = CHECKLISTS[mount];
+  const done = items.filter(it => entry(mount, it).checked).length;
+  $("count").textContent = done + " / " + items.length;
+  $("barFill").style.width = (100 * done / items.length) + "%";
+}
+
+/* Download photos named like: Site_Mount_Item_1.jpg */
+const slug = s => (s || "").trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+$("downloadBtn").addEventListener("click", () => {
+  const mount = state.mount; let n = 0;
+  CHECKLISTS[mount].forEach(item => {
+    (photos[mount + "|" + item] || []).forEach((p, idx) => {
+      const ext = (p.file.name.split(".").pop() || "jpg").toLowerCase();
+      const a = document.createElement("a");
+      a.href = p.url;
+      a.download = [slug(state.site), slug(mount), slug(item), idx + 1].filter(Boolean).join("_") + "." + ext;
+      document.body.appendChild(a); a.click(); a.remove(); n++;
+    });
+  });
+  if (!n) $("downloadBtn").textContent = "No photos yet";
+  setTimeout(() => $("downloadBtn").textContent = "Download photos", 1500);
+});
+
+$("resetBtn").addEventListener("click", () => {
+  const mount = state.mount;
+  CHECKLISTS[mount].forEach(item => {
+    (photos[mount + "|" + item] || []).forEach(p => URL.revokeObjectURL(p.url));
+    delete photos[mount + "|" + item];
+  });
+  delete state.data[mount]; save(); render();
+});
+
+render();
+</script>
+</body>
+</html>
